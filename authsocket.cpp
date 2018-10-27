@@ -201,14 +201,14 @@ void AuthSocket::OnRead()
 {
     const static AuthHandler table[] =
     {
-        { CMD_AUTH_LOGON_CHALLENGE,     STATUS_CHALLENGE,   &AuthSocket::_HandleLogonChallenge    },
-        { CMD_AUTH_LOGON_PROOF,         STATUS_LOGON_PROOF, &AuthSocket::_HandleLogonProof        },
-        { CMD_AUTH_RECONNECT_CHALLENGE, STATUS_CHALLENGE,   &AuthSocket::_HandleReconnectChallenge},
-        { CMD_AUTH_RECONNECT_PROOF,     STATUS_RECON_PROOF, &AuthSocket::_HandleReconnectProof    },
-        { CMD_REALM_LIST,               STATUS_AUTHED,      &AuthSocket::_HandleRealmList         },
-        { CMD_XFER_ACCEPT,              STATUS_PATCH,       &AuthSocket::_HandleXferAccept        },
-        { CMD_XFER_RESUME,              STATUS_PATCH,       &AuthSocket::_HandleXferResume        },
-        { CMD_XFER_CANCEL,              STATUS_PATCH,       &AuthSocket::_HandleXferCancel        }
+        { AUTH_LOGON_CHALLENGE,     STATUS_CHALLENGE,   &AuthSocket::_HandleLogonChallenge    },
+        { AUTH_LOGON_PROOF,         STATUS_LOGON_PROOF, &AuthSocket::_HandleLogonProof        },
+        { AUTH_RECONNECT_CHALLENGE, STATUS_CHALLENGE,   &AuthSocket::_HandleReconnectChallenge},
+        { AUTH_RECONNECT_PROOF,     STATUS_RECON_PROOF, &AuthSocket::_HandleReconnectProof    },
+        { REALM_LIST,               STATUS_AUTHED,      &AuthSocket::_HandleRealmList         },
+        { XFER_ACCEPT,              STATUS_PATCH,       &AuthSocket::_HandleXferAccept        },
+        { XFER_RESUME,              STATUS_PATCH,       &AuthSocket::_HandleXferResume        },
+        { XFER_CANCEL,              STATUS_PATCH,       &AuthSocket::_HandleXferCancel        }
     };
 
     const int AUTH_TOTAL_COMMANDS = sizeof(table)/sizeof(AuthHandler);
