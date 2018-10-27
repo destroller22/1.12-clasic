@@ -46,12 +46,6 @@ enum eAuthCmd
     XFER_CANCEL                                  = 0x34
 };
 
-enum eStatus
-{
-    STATUS_CONNECTED                             = 0,
-    STATUS_AUTHED
-};
-
 // GCC have alternative #pragma pack(N) syntax and old gcc version not support pack(push, N), also any gcc version not support it at some paltform
 #if defined(__GNUC__)
 #pragma pack(1)
@@ -178,30 +172,14 @@ private:
     Patches _patches;
 };
 
-const AuthHandler table[] =
-{
-    { AUTH_LOGON_CHALLENGE,     STATUS_CONNECTED, &AuthSocket::_HandleLogonChallenge    },
-    { AUTH_LOGON_PROOF,         STATUS_CONNECTED, &AuthSocket::_HandleLogonProof        },
-    { AUTH_RECONNECT_CHALLENGE, STATUS_CONNECTED, &AuthSocket::_HandleReconnectChallenge},
-    { AUTH_RECONNECT_PROOF,     STATUS_CONNECTED, &AuthSocket::_HandleReconnectProof    },
-    { REALM_LIST,               STATUS_AUTHED,    &AuthSocket::_HandleRealmList         },
-    { XFER_ACCEPT,              STATUS_CONNECTED, &AuthSocket::_HandleXferAccept        },
-    { XFER_RESUME,              STATUS_CONNECTED, &AuthSocket::_HandleXferResume        },
-    { XFER_CANCEL,              STATUS_CONNECTED, &AuthSocket::_HandleXferCancel        }
-};
-
-#define AUTH_TOTAL_COMMANDS 8
-
 // Holds the MD5 hash of client patches present on the server
 Patcher PatchesCache;
 
 // Constructor - set the N and g values for SRP6
-AuthSocket::AuthSocket(RealmSocket& socket) : pPatch(NULL), socket_(socket)
+AuthSocket::AuthSocket(RealmSocket& socket) : _status(STATUS_CHALLENGE), _accountSecurityLevel(SEC_PLAYER), pPatch(NULL), socket_(socket)
 {
     N.SetHexStr("894B645E89E1535BBDAD5B8B290650530801B18EBFBF5E8FAB3C82872A3E9BB7");
     g.SetDword(7);
-    _authed = false;
-    _accountSecurityLevel = SEC_PLAYER;
 }
 
 // Close patch file descriptor before leaving
@@ -221,47 +199,53 @@ void AuthSocket::OnClose(void)
 // Read the packet from the client
 void AuthSocket::OnRead()
 {
-    #define MAX_AUTH_LOGON_CHALLENGES_IN_A_ROW 3
-    uint32 challengesInARow = 0;
+    const static AuthHandler table[] =
+    {
+        { CMD_AUTH_LOGON_CHALLENGE,     STATUS_CHALLENGE,   &AuthSocket::_HandleLogonChallenge    },
+        { CMD_AUTH_LOGON_PROOF,         STATUS_LOGON_PROOF, &AuthSocket::_HandleLogonProof        },
+        { CMD_AUTH_RECONNECT_CHALLENGE, STATUS_CHALLENGE,   &AuthSocket::_HandleReconnectChallenge},
+        { CMD_AUTH_RECONNECT_PROOF,     STATUS_RECON_PROOF, &AuthSocket::_HandleReconnectProof    },
+        { CMD_REALM_LIST,               STATUS_AUTHED,      &AuthSocket::_HandleRealmList         },
+        { CMD_XFER_ACCEPT,              STATUS_PATCH,       &AuthSocket::_HandleXferAccept        },
+        { CMD_XFER_RESUME,              STATUS_PATCH,       &AuthSocket::_HandleXferResume        },
+        { CMD_XFER_CANCEL,              STATUS_PATCH,       &AuthSocket::_HandleXferCancel        }
+    };
+
+    const int AUTH_TOTAL_COMMANDS = sizeof(table)/sizeof(AuthHandler);
     uint8 _cmd;
+
     while (1)
     {
         if (!socket().recv_soft((char *)&_cmd, 1))
             return;
-
-        if (_cmd == AUTH_LOGON_CHALLENGE)
-        {
-            ++challengesInARow;
-            if (challengesInARow == MAX_AUTH_LOGON_CHALLENGES_IN_A_ROW)
-            {
-                TC_LOG_WARN("server.authserver", "Got %u AUTH_LOGON_CHALLENGE in a row from '%s', possible ongoing DoS", challengesInARow, socket().getRemoteAddress().c_str());
-                socket().shutdown();
-                return;
-            }
-        }
 
         size_t i;
 
         // Circle through known commands and call the correct command handler
         for (i = 0; i < AUTH_TOTAL_COMMANDS; ++i)
         {
-            if ((uint8)table[i].cmd == _cmd && (table[i].status == STATUS_CONNECTED || (_authed && table[i].status == STATUS_AUTHED)))
-            {
-                TC_LOG_DEBUG("server.authserver", "Got data for cmd %u recv length %u", (uint32)_cmd, (uint32)socket().recv_len());
+            if ((uint8)table[i].cmd != _cmd)
+                { continue; }
 
-                if (!(*this.*table[i].handler)())
-                {
-                    TC_LOG_DEBUG("server.authserver", "Command handler failed for cmd %u recv length %u", (uint32)_cmd, (uint32)socket().recv_len());
-                    return;
-                }
-                break;
+            if (table[i].status != _status)
+            {
+                TC_LOG_DEBUG("server.authserver", "Received unauthorized command %u recv length %u", (uint32)_cmd, (uint32)socket().recv_len());
+                return;
             }
+
+            DEBUG_LOG("[Auth] Received command %u, length %u", (uint32)_cmd, (uint32)socket().recv_len());
+            if (!(*this.*table[i].handler)())
+            {
+                TC_LOG_DEBUG("server.authserver", "Command handler failed for cmd %u recv length %u", (uint32)_cmd, (uint32)socket().recv_len());
+                return;
+            }
+            break;
         }
 
         // Report unknown packets in the error log
         if (i == AUTH_TOTAL_COMMANDS)
         {
-            TC_LOG_ERROR("server.authserver", "Got unknown packet from '%s'", socket().getRemoteAddress().c_str());
+            TC_LOG_ERROR("server.authserver", "Got unknown command %u", (uint32)_cmd);
             socket().shutdown();
             return;
         }
@@ -329,6 +313,8 @@ bool AuthSocket::_HandleLogonChallenge()
 
     if ((remaining < sizeof(sAuthLogonChallenge_C) - buf.size()) || (socket().recv_len() < remaining))
         return false;
+
+    _status = STATUS_CLOSED;
 
     //No big fear of memory outage (size is int16, i.e. < 65536)
     buf.resize(remaining + buf.size() + 1);
@@ -507,6 +493,8 @@ bool AuthSocket::_HandleLogonChallenge()
                     TC_LOG_DEBUG("server.authserver", "'%s:%d' [AuthChallenge] account %s is using '%c%c%c%c' locale (%u)", socket().getRemoteAddress().c_str(), socket().getRemotePort(),
                             _login.c_str (), ch->country[3], ch->country[2], ch->country[1], ch->country[0], GetLocaleByName(_localizationName)
                         );
+
+                    _status = STATUS_LOGON_PROOF;
                 }
             }
         }
@@ -527,6 +515,8 @@ bool AuthSocket::_HandleLogonProof()
 
     if (!socket().recv((char *)&lp, sizeof(sAuthLogonProof_C)))
         return false;
+
+    _status = STATUS_CLOSED;
 
     // If the client has no valid version
     if (_expversion == NO_VALID_EXP_FLAG)
@@ -658,7 +648,7 @@ bool AuthSocket::_HandleLogonProof()
             socket().send((char *)&proof, sizeof(proof));
         }
 
-        _authed = true;
+        _status = STATUS_AUTHED;
     }
     else
     {
@@ -739,6 +729,8 @@ bool AuthSocket::_HandleReconnectChallenge()
     if ((remaining < sizeof(sAuthLogonChallenge_C) - buf.size()) || (socket().recv_len() < remaining))
         return false;
 
+    _status = STATUS_CLOSED;
+
     // No big fear of memory outage (size is int16, i.e. < 65536)
     buf.resize(remaining + buf.size() + 1);
     buf[buf.size() - 1] = 0;
@@ -780,6 +772,8 @@ bool AuthSocket::_HandleReconnectChallenge()
 
     K.SetHexStr ((*result)[0].GetCString());
 
+    _status = STATUS_RECON_PROOF;
+
     // Sending response
     ByteBuffer pkt;
     pkt << uint8(AUTH_RECONNECT_CHALLENGE);
@@ -799,6 +793,8 @@ bool AuthSocket::_HandleReconnectProof()
     sAuthReconnectProof_C lp;
     if (!socket().recv((char *)&lp, sizeof(sAuthReconnectProof_C)))
         return false;
+
+    _status = STATUS_CLOSED;
 
     if (_login.empty() || !_reconnectProof.GetNumBytes() || !K.GetNumBytes())
         return false;
@@ -820,7 +816,7 @@ bool AuthSocket::_HandleReconnectProof()
         pkt << uint8(0x00);
         pkt << uint16(0x00);                               // 2 bytes zeros
         socket().send((char const*)pkt.contents(), pkt.size());
-        _authed = true;
+        _status = STATUS_AUTHED;
         return true;
     }
     else
