@@ -233,7 +233,7 @@ void AuthSocket::OnRead()
                 return;
             }
 
-            DEBUG_LOG("[Auth] Received command %u, length %u", (uint32)_cmd, (uint32)socket().recv_len());
+            TC_LOG_DEBUG("server.authserver", "Received command %u, length %u", (uint32)_cmd, (uint32)socket().recv_len());
             if (!(*this.*table[i].handler)())
             {
                 TC_LOG_DEBUG("server.authserver", "Command handler failed for cmd %u recv length %u", (uint32)_cmd, (uint32)socket().recv_len());
